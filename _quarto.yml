@@ -4,11 +4,29 @@ project:
   output-dir: _outputs
   
 author: 
+  - name: Ladislas Nalborczyk
+    orcid: 0000-0002-7419-9855
+    url: https://lnalborczyk.github.io/
+    roles: 
+      - Original script
+    affiliations:
+    - id: unicog
+      name: Cognitive Neuroimaging Unit, NeuroSpin, CEA, Université Paris-Saclay
+      city: Gif-sur-Yvette
+      country: France
+      url: https://www.unicog.org/
+    - id: pbi
+      name: Paris Brain Institute
+      city: Paris
+      country: France
+      url: https://parisbraininstitute.org/paris-brain-institute-research-teams/picnic-neuropsychology-and-functional-neuroimaging
   - name: Maël Delem
     orcid: 0009-0005-8518-1991
     email: mael.delem@univ-lyon2.fr
     corresponding: true
     url: https://emc.univ-lyon2.fr/equipes/memoire-emotion-et-attention-mea/delem-mael
+    roles: 
+      - Notebook versions
     affiliations:
     - id: emc
       name: Study of Cognitive Mechanisms (EMC) Laboratory, Université Lumière Lyon 2

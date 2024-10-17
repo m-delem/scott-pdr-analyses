@@ -1,0 +1,336 @@
+---
+title: Power analysis by simulation
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+library(here)
+source(here("scripts/_setup.R"))
+source(here("scripts/_functions.R"))
+# source(here("scripts/00_initial_model.R"))
+```
+
+:::: {.content-visible when-format="html"}
+::: {.callout-note collapse="true"}
+# Packages and setup
+```r
+{{< include ../scripts/_setup.R >}}
+```
+:::
+::::
+
+To perform the power analysis, we will simulate many datasets under different scenarios and fit the hypothesised model on each of them to see how well we can recover the "true" effect. In the previous notebook (`00-initial-model.qmd`) we detailed the way we built the model at the heart of this process and its characteristics. This core fitting procedure is also gathered in the `scripts/00_initial_model.R` script, from which we load this initial model in the power analysis script. This model will be updated iteratively. To do so efficiently, we designed a function that simulates data (using the previously defined `sim_data` function), fits the model and extracts Bayes Factors. We then ran this function many times and using parallel processing with the `purrr` and `furrr` packages.
+
+```{r}
+#| label: simulate-data-fit-model-extract-bayes-factors
+#| code-summary: The function
+#| eval: false
+
+sim_and_fit_bf <- function (
+    n_ppts, 
+    n_trials, 
+    beta_context_task, 
+    simulation,
+    model,
+    p
+) {
+  # Simulating data
+  df <- 
+    sim_data(
+      n_ppts = n_ppts, 
+      n_trials = n_trials, 
+      beta_context_task = beta_context_task
+    ) |> 
+    # summarising data
+    group_by(participant, context, task) |>
+    mutate(n_trials = n()) |> 
+    reframe(
+      nb_da = sum(response == 1),
+      n_trials = unique(n_trials)
+    ) |> 
+    # defining the sum contrasts
+    define_contrasts("context", c(-0.5, +0.5)) |>
+    define_contrasts("task", c(+0.5, -0.5))
+  
+  # Fitting the model
+  updated_model <- update(
+    object = model,
+    newdata = df,
+    chains = n_cores,
+    cores  = n_cores,
+    iter = n_iter,
+    silent = 2,
+    refresh = 0
+  )
+  
+  # Extracting Bayes factors
+  hyp_two_sided <- hypothesis(updated_model, "context1:task1 = 0")
+  hyp_one_sided <- hypothesis(updated_model, "context1:task1 > 0")
+  
+  # retrieving the two-sided BF10 (1/BF01) and the one-sided BF10
+  bf10 <- 1 / as.numeric(hyp_two_sided$hypothesis$Evid.Ratio)
+  bfdir <- as.numeric(hyp_one_sided$hypothesis$Evid.Ratio)
+  
+  # updating the `progressr` progress bar
+  p()
+  
+  # returning the BFs
+  return (c(bf10, bfdir))
+}
+```
+
+We first set some parameters to explore:
+
+- `n_ppts`: the number of participants (from 40 to 70 in steps of 10)
+- `n_trials`: the number of trials per participant (from 110 to 160 in steps of 10)
+- `beta_context_task`: the effect of the interaction (from 0.06 to 0.13 in steps of 0.01)
+- `n_sims`: the number of simulations for each combination (100)
+
+We then create a grid of parameters and associated datasets:
+
+```{r}
+#| label: create-grid
+#| code-fold: false
+#| eval: false
+
+# number of participants
+n_ppts <- seq(40, 70, 10)
+
+# number of trials per participant
+n_trials <- seq(110, 160, 10)
+
+# effect of the interaction
+beta_context_task <- seq(0.06, 0.13, 0.01)
+
+# number of simulations for each combination
+n_sims <- 100
+
+# creating a grid of parameters and associated datasets
+combinations <- crossing(
+  n_ppts = n_ppts, 
+  n_trials = n_trials, 
+  beta_context_task = beta_context_task,
+  simulation = 1:n_sims
+)
+```
+
+We then run the simulations in parallel:
+
+```{r}
+#| label: parallel-setup
+#| code-summary: Parallel processing setup
+#| eval: false
+
+# We will fit as many models as possible in parallel. If we allow ourselves to 
+# use all the cores minus one, the number of models will be 
+# floor(n_available / n_cores), n_cores being the number of cores used for each 
+# model ("floor" rounds the number down to avoid using one excess core).
+
+# detecting the number of cores available
+n_available <- parallel::detectCores() - 1
+# number of cores/chains for each model
+n_cores <- 2
+# number of models to fit in parallel
+n_models <- floor(n_available / n_cores)
+
+# recruiting the workers (cores) for parallel processing
+plan(multisession, workers = n_models)
+
+# defining the number of iterations per chain based on cores per model (+ 1000 
+# warm-up iterations)
+n_iter <- ceiling(40000 / n_cores) + 1000
+```
+
+```{r}
+#| label: run-simulations
+#| code-fold: false
+#| eval: false
+
+# recording the time at which the simulation started
+start <- proc.time()[3]
+
+# running the simulations in parallel
+with_progress({
+  p <- progressor(steps = nrow(combinations))
+  simulation_results <- 
+    future_pmap(
+      .l = combinations, 
+      .f = sim_and_fit_bf, 
+      model = initial_model,
+      p = p, # to pass to .f for progressr
+      .options = furrr_options(seed = TRUE)
+    )
+})
+
+simulation_results <-  
+  bind_cols(combinations, tibble(bf = simulation_results)) |> 
+  unnest_wider(col = bf, names_sep = "_") |> 
+  na.omit()
+
+# calculating total computation time
+total_time <- 
+  (proc.time()[3] - start) |> 
+  round(digits = 2) |> 
+  seconds_to_period()
+
+cat(paste0(
+  "The entire power analysis took ", total_time, ".\n",
+  "-------------------------------------------------------------------------",
+  "\n"
+))
+```
+
+The power analysis by simulation is computationally intensive, so it has been done beforehand in a separate script, `scripts/01_power_analysis.R`. The power analysis presented in [the Preregistered Direct Replication manuscript](https://osf.io/preprints/psyarxiv/abps9) required 19 200 simulations and re-fits of the initial model and took 1 day, 8 hours and 18 minutes. The results of these simulations are saved in the `data/r-data-structures/power-analyses-results-240702.rds` file. We will load these results and present them in the following sections. The all the code in this notebook is displayed for reference, but it won't be executed upon rendering it.
+
+```{r}
+#| label: loading-the-results
+#| code-fold: false
+
+simulation_results <- readRDS("data/r-data-structures/power-analyses-results-240702.rds")
+```
+
+We compute the power from the BFs obtained as the proportion of BFs greater than 10. We also calculate the standard error of the power estimate. We then plot the power as a function of the effect size for each combination of the number of participants, number of trials, and effect size.
+
+```{r}
+#| label: computing-power
+#| code-summary: Computing power from the simulation results
+
+bf_threshold <- 10
+
+df_power <- 
+  simulation_results |> 
+  group_by(n_ppts, n_trials, beta_context_condition) |> 
+  reframe(
+    # power for BF10
+    bf_10_attained = sum(bf_1 >= bf_threshold),
+    bf_10_power = bf_10_attained / n(),
+    bf_10_se = sqrt(bf_10_power * (1 - bf_10_power) / n()),
+    # power for BF+
+    bf_dir_attained = sum(bf_2 >= bf_threshold),
+    bf_dir_power = bf_dir_attained / n(),
+    bf_dir_se = sqrt(bf_dir_power * (1 - bf_dir_power) / n()),
+  ) |> 
+  mutate(across(c(beta_context_condition), factor)) |> 
+  mutate(
+    n_ppts = 
+      paste(n_ppts, "participants") |> 
+      factor(),
+    n_trials = 
+      paste(n_trials, "trials") |> 
+      factor()
+    )
+```
+
+```{r}
+#| label: power-analyses-results
+#| code-summary: Plotting the power analysis results
+#| fig-width: 14
+#| fig-height: 10
+#| column: page
+
+df_power |> 
+  ggplot(aes(
+    x = beta_context_condition,
+    y = bf_dir_power,
+    color = n_trials,
+    fill = n_trials,
+    group = n_trials)
+  ) +
+  geom_hline(
+    yintercept = 0.9, 
+    linetype = 3, 
+    alpha = 0.8, 
+    linewidth = 0.7,
+    color = "red"
+    ) +
+  geom_line(linewidth = 0.5) +
+  geom_point(
+    pch = 21, 
+    color = "white",
+    show.legend = FALSE,
+    size = 3
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = bf_dir_power - bf_dir_se,
+      ymax = bf_dir_power + bf_dir_se),
+    width = 0,
+    linewidth = .5,
+    show.legend = FALSE
+  ) +
+  # geom_smooth(
+  #   method = "lm", 
+  #   se = FALSE,
+  #   na.rm = TRUE,
+  #   linewidth = 0.5, 
+  #   alpha = 0.1, 
+  #   fullrange = TRUE, 
+  #   show.legend = FALSE
+  # ) +
+  # annotate(
+  #   geom = "text",
+  #   label = "90% power",
+  #   size = 4,
+  #   color = "black",
+  #   x = -Inf,
+  #   y = 0.9,
+  #   hjust = -0.1,
+  #   vjust = -1
+  # ) +
+  labs(
+    title = "A priori power analysis (100 simulations per dot, 19200 total)",
+    x = "Interaction effect size",
+    y = "Statistical power (proportion of BF+ >= 10)",
+    color = "Number of\ntrials"
+  ) +
+  facet_wrap(vars(n_ppts), nrow = 2) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = seq(0, 1, 0.2), 
+    expand = expansion(c(0, 0.05))) +
+  scale_color_viridis_d() + 
+  scale_fill_viridis_d() + 
+  theme(
+    panel.grid.major = element_line(colour = "grey90", linewidth = 0.5),
+    panel.grid.minor.y = element_line(colour = "grey95", linewidth = 0.4),
+    # panel.background = element_rect(colour = "black"),
+    panel.border = element_rect(fill = NA, colour = "black"),
+    axis.line = element_blank()
+  )
+```
+
+
+```{r}
+#| label: saving-the-plot
+#| echo: false
+
+ggsave("figures/power-analysis-240702.png")
+```
+
+This analysis allows us to make an informed decision about the number of participants and trials needed to achieve a certain level of power. We needed to find a balance between the number of participants and the number of trials to keep the experiment feasible while ensuring a high level of power. We chose to opt for 60 participants and 140 trials per participant to achieve a power of 90% for an effect size of at least 0.11, which corresponds to a proportion difference around 2.8%. This is more than half the effect size we observed in the original study, which was around 6%, so we concluded that our analysis was conservative enough for our purposes.
+
+:::: {.content-visible when-format="html"}
+
+&nbsp;
+&nbsp;
+&nbsp;
+
+::: {.callout-note collapse="true"}
+# Session information
+
+```{r}
+#| label: session-information
+#| echo: false
+
+cat("═════════════════════════════════════════════════════════════════════════")
+report_system(session = sessionInfo())
+cat("Packages used:")
+report_packages(session = sessionInfo())
+cat("═════════════════════════════════════════════════════════════════════════")
+```
+:::
+::::
+
+

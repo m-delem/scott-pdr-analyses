@@ -15,6 +15,19 @@
 renv::restore()
 
 
+# CmdStanR for Bayesian modelling ------------------------------------------
+
+# The cmdstan backend, if not already installed, has to be installed on your 
+# computer first, **outside** of the project:
+# install.packages("cmdstanr")
+# library("cmdstanr")
+# check_cmdstan_toolchain() # check if RTools is setup
+# nb_cores <- parallel::detectCores() - 1
+# install_cmdstan(cores = nb_cores)
+
+# Now inside the project, you need to run a special install for cmdstanr:
+# renv::install("stan-dev/cmdstanr")
+
 # Packages ----------------------------------------------------------------
 
 # pacman allows to check/install/load packages with a single call
@@ -26,6 +39,20 @@ pacman::p_load(
   here,       # easy file paths
   see,        # theme_modern and okabeito palette
   report,     # reporting various info 
+  ggbeeswarm, # jittered plots
+  scales,     # scales for ggplot2
+  Hmisc,      # plot stats
+  # ---- Modelling
+  faux,      # simulating data
+  bayesplot, # plotting for Bayesian models
+  brms,      # Bayesian regression models
+  rstan,     # Stan interface
+  parallel,  # parallel processing
+  future,    # parallel with brms
+  furrr,     # parallel with purrr
+  progressr, # progress bar with furrr
+  cmdstanr,  # Stan interface
+  emmeans,   # post-hoc tests
   # Should remain last to avoid conflicts with other packages
   quarto,     # quarto reports
   tidyverse   # modern R ecosystem
@@ -34,6 +61,7 @@ pacman::p_load(
 # Global cosmetic theme ---------------------------------------------------
 
 theme_set(theme_modern(base_size = 14)) # from see in easystats
+color_scheme_set("green") # for bayesplot
 
 # setting my favourite palettes as ggplot2 defaults
 options( 
@@ -42,7 +70,6 @@ options(
   ggplot2.continuous.colour = scale_colour_viridis_c,
   ggplot2.continuous.fill   = scale_fill_viridis_c
 )
-
 
 # Fixing a seed for reproducibility ---------------------------------------
 set.seed(14051998)
