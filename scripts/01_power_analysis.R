@@ -29,7 +29,7 @@ n_iter <- ceiling(40000 / n_cores) + 1000
 
 # number of participants
 # n_ppts <- seq(40, 70, 10)
-n_ppts <- c(6) # testing
+n_ppts <- c(60) # testing
 
 # number of trials per participant
 # n_trials <- seq(110, 160, 10)
@@ -41,7 +41,7 @@ beta_context_task <- seq(0.04, 0.16, 0.01) # testing
 
 # number of simulations for each combination
 # n_sims <- 100
-n_sims <- 200 # testing
+n_sims <- 100 # testing
 
 # creating a grid of parameters and associated datasets
 combinations <- crossing(
@@ -100,7 +100,7 @@ cat(paste0(
 # Now for the second power analysis, we launched 19200 simulations. Let's see!
 # Result: 1d 8H 18M 31S. Cool!
 
-# saveRDS(
-#   simulation_results, 
-#   file = "data/r-data-structures/power-analyses-results-240702.rds"
-# )
+saveRDS(
+  simulation_results,
+  file = "data/r-data-structures/power-analyses-results-241017.rds"
+)

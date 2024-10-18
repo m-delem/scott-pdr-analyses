@@ -224,13 +224,11 @@ df_power <-
 ```
 
 ```{r}
-#| label: power-analyses-results
+#| label: power-analyses-plot
 #| code-summary: Plotting the power analysis results
-#| fig-width: 14
-#| fig-height: 10
-#| column: page
 
-df_power |> 
+p <- 
+  df_power |> 
   ggplot(aes(
     x = beta_context_condition,
     y = bf_dir_power,
@@ -301,15 +299,19 @@ df_power |>
   )
 ```
 
-
 ```{r}
-#| label: saving-the-plot
+#| label: print-and-save-plot
 #| echo: false
+#| fig-width: 14
+#| fig-height: 10
+#| column: page
+
+print(p)
 
 ggsave("figures/power-analysis-240702.png")
 ```
 
-This analysis allows us to make an informed decision about the number of participants and trials needed to achieve a certain level of power. We needed to find a balance between the number of participants and the number of trials to keep the experiment feasible while ensuring a high level of power. We chose to opt for 60 participants and 140 trials per participant to achieve a power of 90% for an effect size of at least 0.11, which corresponds to a proportion difference around 2.8%. This is more than half the effect size we observed in the original study, which was around 6%, so we concluded that our analysis was conservative enough for our purposes.
+This analysis allowed us to make an informed decision about the number of participants and trials needed to achieve a certain level of power. We needed to find a balance between the number of participants and the number of trials to keep the experiment feasible while ensuring a high level of power. We chose to opt for 60 participants and 140 trials per participant to achieve a power of 90% for an effect size of at least 0.11, which corresponds to a proportion difference around 2.8%. This is more than half the effect size we observed in the original study, which was around 6%, so we concluded that our analysis was conservative enough for our purposes.
 
 :::: {.content-visible when-format="html"}
 
