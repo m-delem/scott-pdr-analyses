@@ -73,7 +73,3 @@ options(
 
 # Fixing a seed for reproducibility ---------------------------------------
 set.seed(14051998)
-
-
-# Adding all packages' citations to a .bib --------------------------------
-knitr::write_bib(c(.packages()), file = here("bibliography/packages.bib"))

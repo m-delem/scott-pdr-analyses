@@ -20,8 +20,8 @@ source(here("scripts/_functions.R"))
 :::
 ::::
 
-Tip: find a consistent and clear naming scheme for your folders, scripts, functions, and variables, and stick to it. This will make your life easier when you need to find something later on.
 
+<!-- Content goes here -->
 
 
 :::: {.content-visible when-format="html"}
