@@ -8,9 +8,6 @@
 # Last updated on April 14, 2026                    #
 #####################################################
 
-library(tidyverse)
-library(jsonlite)
-
 # Import the .txt file
 file_path <- 
   here::here("inst/extdata/pretest") |> 
@@ -54,6 +51,12 @@ df_agg <-
   dplyr::arrange(freq)
 print(df_agg)
 
+df_stims <-
+  data.frame(
+    stimulus = paste0("daga", seq(1, 2001, 1)),
+    freq = seq(1650, 2650, 0.5)
+  )
+
 # Fit probit regression
 mod_probit <- 
   glm(
@@ -65,9 +68,9 @@ summary(mod_probit)
 
 # Predicted probabilities for presented stimuli
 df_pred <- 
-  df_agg |>
+  df_stims |>
   dplyr::mutate(
-    pred_prob = predict(mod_probit, newdata = df_agg, type = "response")
+    pred_prob = predict(mod_probit, newdata = df_stims, type = "response")
   )
 print(df_pred)
 
@@ -149,7 +152,7 @@ threshold_plot <-
 highlight_df <- 
   closest_stimuli |>
   dplyr::rename(target_probability = target_threshold) |>
-  dplyr::left_join(df_agg, by = c("stimulus", "freq") ) |>
+  dplyr::left_join(df_pred, by = c("stimulus", "freq", "pred_prob")) |>
   dplyr::mutate(label = paste0(stimulus, "\n(", round(pred_prob, 2), ")") )
 
 # Plot
@@ -182,7 +185,7 @@ ggplot2::ggplot() +
     ) +
   ggplot2::geom_point(
     data = highlight_df,
-    ggplot2::aes(x = freq, y = prop_d),
+    ggplot2::aes(x = freq, y = pred_prob),
     size = 4,
     shape = 21,
     stroke = 1.2,
@@ -190,17 +193,19 @@ ggplot2::ggplot() +
     ) +
   ggplot2::geom_label(
     data = highlight_df,
-    ggplot2::aes(x = freq, y = prop_d, label = label),
-    vjust = -0.25,
+    ggplot2::aes(x = freq, y = pred_prob, label = stimulus),
+    vjust = -0.3,
+    hjust = -0.1,
     size = 4
     ) +
-  # ggplot2::geom_label(
-  #   data = threshold_plot,
-  #   ggplot2::aes(x = estimated_freq, y = target_probability, label = label),
-  #   hjust = -0.1,
-  #   vjust = -0.4,
-  #   size = 4
-  #   ) +
+  ggplot2::geom_text(
+    data = threshold_plot,
+    x = 1950,
+    ggplot2::aes(y = target_probability, label = label),
+    hjust = -0.1,
+    vjust = -0.4,
+    size = 4
+    ) +
   ggplot2::scale_y_continuous(
     limits = c(0, 1),
     breaks = seq(0, 1, by = 0.1)
