@@ -1,0 +1,506 @@
+---
+title: Initial model design
+subtitle: Building the model used for power analysis by simulation
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+library(here)
+source(here("scripts/_setup.R"))
+source(here("scripts/_functions.R"))
+```
+
+:::: {.content-visible when-format="html"}
+::: {.callout-note collapse="true"}
+# Packages and setup
+```r
+{{< include ../scripts/_setup.R >}}
+```
+:::
+::::
+
+This notebook breaks down the design of the initial model for the power analysis by simulation conducted in the `scripts/01_power_analysis.R` script and reported in the `notebooks/01-power-analysis.qmd` notebook. This model is re-used iteratively in those scripts and updated to be fit on each simulated dataset. The power analysis presented in [the Preregistered Direct Replication](https://osf.io/preprints/psyarxiv/abps9) required 19200 simulations and fits of this model.
+
+Parts of this code was inspired by [this script from Lisa DeBruine & Dale Barr](https://debruine.github.io/lmem_sim/articles/appendix1a_example_code.html).
+
+# Model structure
+
+Our dependant variable is the percentage of "da" responses per context sound and task. We are interested in the effects of the context sound ("al" vs. "ar"), the task (matching vs. contrasting), and their interaction on the percentage of "da" responses. We also include by-participant varying intercepts and slopes for the context sound, the task, and their interaction. The model can be written as follows:
+
+```{r}
+#| label: model-formula
+#| code-fold: false
+
+formula <- nb_da | trials(n_trials) ~ 1 + context * task + 
+  (1 + context * task | participant)
+```
+
+This is our hypothesis on the way the data is generated. We will simulate data according to this model and then fit the model to the simulated data to see if we can recover the true values of the parameters. This model has various parameters: the overall intercept $\beta_{0}$, the effect of the context sound $\beta_{context}$, the effect of the task $\beta_{task}$, the interaction between the context sound and the task $\beta_{interaction}$, the by-participant varying intercepts standard deviation $\tau_{0}$, and the by-participant varying slopes for the context sound  $\tau_{context}$, the task  $\tau_{task}$, and their interaction $\tau_{interaction}$. The varying effects also have a correlation structure $\rho$. We will simulate data with these parameters and then fit the model to the simulated data to see if we can recover the true values of the parameters. The power analysis will later consist in simulating data with different parameters and see how well we can recover them.
+
+# Data simulation function
+
+We need to simulate a dataset that will be used to fit the first model. We simulated binomial data that correspond to the percentage of "da" responses per context sound and task (see [this](https://debruine.github.io/lmem_sim/articles/appendix3a_binomial.html) and [this](https://debruine.github.io/lmem_sim/articles/appendix3b_extended_binomial.html) example of simulation procedures). To perform this operation, we created a function `sim_data` that generates data for a given number of participants and trials, and a set of model parameters described above.
+
+```{r}
+#| label: sim-data
+#| code-summary: The `sim_data` function
+
+# utility functions (logit and inverse-logit)
+logit <- function (x) {log(x / (1 - x) )}
+inv_logit <- function (x) {1 / (1 + exp(-x) )}
+
+sim_data <- function (
+    # number of participants
+    n_ppts = 50,
+    # number of trials per participant and task
+    n_trials = 50,
+    # overall intercept
+    beta_0 = 0,
+    # effect of contextual sound (e.g., "al" vs. "ar")
+    beta_context = 0.3,
+    # effect of task (matching vs. contrasting)
+    beta_task = 0.25,
+    # interaction between context and task
+    beta_context_task = 0.2,
+    # by-participant varying intercept sd
+    tau_0 = 0.05,
+    # by-participant varying slope sd
+    tau_context = 0.05,
+    # by-participant varying slope sd
+    tau_task = 0.05,
+    # by-participant varying slope sd
+    tau_context_task = 0.05,
+    # by-participant varying-effect correlation structure
+    # subj_0 * subj_context, subj_task, subj_context_task
+    # subj_context * subj_task, subj_context_task
+    # subj_task * subj_context_task
+    participant_rho = c(0, 0, 0, 0, 0, 0)
+) {
+  
+  # simulate a sample of trials
+  trials <- crossing(
+    trials = 1:n_trials,
+    context = factor(c("al", "ar"), ordered = FALSE),
+    task = factor(c("matching", "contrasting"), ordered = FALSE)
+  )
+  
+  # simulate a sample of participants
+  participants <- faux::rnorm_multi(
+    n = n_ppts, 
+    mu = 0,
+    sd = c(tau_0, tau_context, tau_task, tau_context_task),
+    r = participant_rho,
+    varnames = c("S_0", "S_context", "S_task", "S_context_task")
+    ) |> 
+    mutate(participant = faux::make_id(n(), "S")) |> 
+    select(participant, everything())
+  
+  # crossing participants and trials
+  dat <- 
+    crossing(participants, trials) |> 
+    mutate(
+      # recoding predictors
+      X_context = case_match(context, "al" ~ -0.5, "ar" ~ 0.5), # recode was superseded by `case_match`
+      X_task = case_match(task, "matching" ~ -0.5, "contrasting" ~ 0.5),
+      # add together fixed and random effects for each effect
+      B_0 = beta_0 + S_0,
+      B_context = beta_context + S_context,
+      B_task = beta_task + S_task,
+      B_context_task = beta_context_task + S_context_task,
+      # linear model
+      Y = B_0 + (B_context * X_context) + (B_task * X_task) + (B_context_task * X_context * X_task),
+      # converting to probability of getting 1
+      pr = inv_logit(Y),
+      # sampling from Bernoulli distribution
+      response = rbinom(n(), 1, pr)
+    ) |> 
+    select(participant, context, task, Y, pr, response)
+  
+  # returning these data
+  return (dat)
+}
+```
+
+We created a function `betas_to_proportions` that returns to the proportion of "da" responses for each context sound and task given the model parameters ($\beta$ values). This will allow us to check the correspondence between the model parameters and the interpretable effect sizes in percent.
+
+```{r}
+#| label: betas-to-proportions
+#| code-summary: The `betas_to_proportions` function
+
+betas_to_proportions <- function (b0, b_cont, b_task, b_int) {
+  
+  al_match <- inv_logit(b0 + (-0.5) * b_cont + (-0.5) * b_task + 0.25 * b_int)
+  al_contr <- inv_logit(b0 + (-0.5) * b_cont + 0.5 * b_task + (-0.25) * b_int)
+  ar_match <- inv_logit(b0 + 0.5 * b_cont + (-0.5) * b_task + (-0.25) * b_int)
+  ar_contr <- inv_logit(b0 + 0.5 * b_cont + 0.5 * b_task + 0.25 * b_int)
+  
+  return (data.frame(
+    al_match = al_match, 
+    ar_match = ar_match,
+    al_contr = al_contr, 
+    ar_contr = ar_contr
+  ))
+}
+```
+
+@scottInnerSpeechCaptures2013 (the replicated study) have effect sizes around 6% for their silent speech task. Inner speech tasks, however, are likely to have much smaller effect sizes. We will therefore study model parameters that yield proportion differences between 1% and 4%. As the main effect of interest is the interaction between context and task, we will tweak the $\beta_{interaction}$ parameter and calculate the interaction contrast. Here are the results:
+
+```{r}
+#| label: proportions
+#| echo: false
+
+betas_to_interaction <- function(b0, b_cont, b_task, b_int){
+  
+  betas_to_proportions(b0, b_cont, b_task, b_int) |>
+    reframe(interaction_diff = (ar_contr - al_contr) - (ar_match - al_match)) |> 
+    pull(interaction_diff)
+}
+
+tibble(
+  b0 = 0,
+  b_cont = 0.3,
+  b_task = 0.25,
+  b_int = seq(0.04, 0.16, 0.01) 
+  ) |>
+  rowwise() |> 
+  mutate(Proportion = betas_to_interaction(b0, b_cont, b_task, b_int)) |> 
+  select(`$\\beta_{interaction}$` = b_int, Proportion) |> 
+  display(digits = 3)
+```
+
+We can see that $\beta_{interaction}$ = 0.04 correponds to a 1% interaction contrast, 0.08 is 2%, 0.12 is 3%, and 0.16 is 4%. Let's simulate some data with these parameters and see how it looks like.
+
+```{r}
+#| label: fig-interaction-effects
+#| fig-cap: 'Simulated data for 1%, 2%, 3%, and 4% differences between tasks in "da" response differences between the "ar" and "al" contexts. The individual trials are shown as violins, and the mean difference by task is shown as a line. The mean by participant is shown as a dotted line. The error bars represent the 95% confidence interval around the mean by condition. The plot shows that the effect sizes are well captured by the model.'
+#| fig-width: 10
+#| fig-height: 12
+
+# simulating data for 4 effect sizes
+df <-
+  tibble(
+    effect = paste0(seq(1, 4), "% difference") |> as.factor(),
+    b_int = c(0.04, 0.08, 0.12, 0.16)
+  ) |> 
+  rowwise() |> 
+  mutate(data = list(
+    sim_data(
+      n_ppts = 60, 
+      n_trials = 150, 
+      beta_context_task = b_int
+      )
+    )
+  ) |> 
+  unnest(data) |> 
+  group_by(effect, participant, context, task) |>  
+  # computing the proportion of "da" responses per participant and task
+  reframe(prop_da = mean(response == 1) * 100) |> 
+  # computing the difference of "da" response between "ar" and "al" contexts
+  pivot_wider(names_from = context, values_from = prop_da) |> 
+  mutate(
+    diff_prop = ar - al,
+    task = str_to_title(task)
+  )
+  
+# plotting
+df |> 
+  ggplot(
+    aes(
+      x = task, 
+      y = diff_prop,
+      colour = task, 
+      fill = task
+      )
+    ) +
+  
+  # baseline level (i.e., no difference between contexts)
+  geom_hline(yintercept = 0, linetype = 3, linewidth = 0.75) +
+  
+  # plotting the distribution of individual trials
+  geom_violinhalf(
+    trim = FALSE,
+    flip = 1,
+    # bw = 0.1,
+    alpha = 0.5,
+    show.legend = FALSE
+    ) +
+  
+  # plotting individual trials
+  geom_quasirandom(
+    color = "white",
+    pch = 21,
+    width = 0.1, 
+    size = 2,
+    alpha = 0.6,
+    show.legend = FALSE
+    ) +
+  # plotting the mean difference as a line
+  stat_summary(
+    aes(group = 1),
+    fun = mean, 
+    geom = "line", 
+    linewidth = 1,
+    color = "grey50",
+    show.legend = FALSE,
+    linetype = "solid"
+    ) +
+  # plotting the mean by subject
+  stat_summary(
+    aes(group = participant),
+    fun = mean, 
+    geom = "line", 
+    linewidth = 0.5,
+    color = "grey70",
+    show.legend = FALSE,
+    linetype = "dotted"
+    ) +
+  # plotting the mean errorbar by task
+  stat_summary(
+    fun.data = function(x){mean_cl_normal(x, conf.int = 0.95)},
+    geom = "errorbar", 
+    linewidth = 1.5, 
+    width = 0,
+    show.legend = FALSE
+    ) +
+  # plotting the mean by task
+  stat_summary(
+    fun = mean, 
+    geom = "point", 
+    size = 3,
+    show.legend = FALSE
+    ) +
+  
+  facet_wrap(vars(effect), scales = "free") + 
+  
+  # increasing y-axis ticks
+  scale_y_continuous(
+    breaks = breaks_pretty(20),
+    expand = expansion(c(0, 0))
+    ) +
+  
+  # axes labels
+  labs(
+    x = "Condition",
+    y = "% difference of 'da' responses between 'ar' and 'al' contexts"
+    ) +
+  # cosmetic theme
+  theme(
+    axis.title.y = element_text(size = 12),
+    axis.ticks.y = element_line(),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 14),
+    panel.grid.major.y = element_line(linewidth = 0.5, color = "grey85"),
+    panel.grid.minor.y = element_line(linewidth = 0.5, color = "grey90")
+    )
+
+# saving the plot
+ggsave(here("figures/simulated-data.png"))
+```
+
+# Fitting the model
+
+We can now fit the model to the simulated data. The power analysis will require fitting numerous Bayesian hierarchical models on simulated datasets. However, a single fit of a new model with this package requires compiling Stan code, which is computationally expensive. To avoid this, we fitted the main model once and saved it as an RDS file. Afterwards, we cut the compilation time by simply "updating" the model with new data.
+
+We used the `brms` package and the `cmdstanr` backend to fit the model. We used weakly informative priors, which are a normal prior with mean 0 and standard deviation 1 for the overall intercept, and a normal prior with mean 0 and standard deviation 0.1 for the other parameters. We fitted the model with 60 participants, 150 trials per participant and $\beta_{interaction}$ = 0.16 (these numbers are arbitrary and irrelevant for the first fit). We used all available cores to fit chains in parallel and reach 40000 post-warmup iterations total. On 19 cores, each chain had 3106 iterations and took 15.7 seconds to execute on average.
+
+```{r}
+#| label: fitting-model
+#| code-summary: Fitting the model to the simulated data
+
+# simulating and reshaping data
+df <- 
+  sim_data(n_ppts = 60, n_trials = 150, beta_context_task = 0.16) |> 
+  group_by(participant, context, task) |>
+  mutate(n_trials = n()) |>
+  reframe(nb_da = sum(response == 1), n_trials = unique(n_trials)) |>
+  # custom function to define contrasts in a pipe, see _functions.R
+  define_contrasts("context", c(-0.5, +0.5)) |>
+  define_contrasts("task", c(+0.5, -0.5))
+
+# priors
+priors <- c(
+  prior(normal(0, 1), class = Intercept),
+  prior(normal(0, 0.1), class = b)
+)
+
+# detecting the number of cores
+n_cores <- parallel::detectCores() - 1
+# defining the number of iterations (+ 1000 warm-up)
+n_iter <- ceiling(40000 / n_cores) + 1000
+
+# see the formula in the first chunk
+
+# fitting the model
+initial_model <- brm(
+  formula = formula,
+  data = df,
+  family = binomial(link = "logit"),
+  prior = priors,
+  sample_prior = TRUE,
+  chains = n_cores,
+  cores  = n_cores,
+  warmup = 1000, 
+  iter = n_iter,
+  silent = 1,
+  refresh = 500,
+  backend = "cmdstanr",
+  stan_model_args = list(stanc_options = list("O1")),
+  save_pars = save_pars(all = TRUE),
+  file = here("data/r-data-structures/initial_model"),
+  file_compress = "xz"
+)
+```
+
+# Examining the effects
+
+We can now use the `hypothesis` function to extract the Bayes factor $BF_{10}$ in favour of (1) the alternative to the null hypothesis and (2) the directional hypothesis of a positive interaction effect.
+
+```{r}
+#| label: hypothesis
+#| code-fold: false
+
+hyp1 <- hypothesis(initial_model, "context1:task1 = 0")
+hyp2 <- hypothesis(initial_model, "context1:task1 > 0")
+```
+
+```{r}
+#| label: print-bf
+#| echo: false
+
+cat("The Bayes Factor BF_10 indicates that the alternative hypothesis of an interaction effect is", round(1 / hyp1$hypothesis$Evid.Ratio, 2), "times more likely than the null hypothesis.\n")
+cat("The Bayes Factor BF+ indicates that the interaction effect is", round(hyp2$hypothesis$Evid.Ratio, 2), "times more likely to be positive than negative.\n")
+```
+
+We can see that 60 participants / 150 trials / 4% difference is well detected. However, the effect size is most likely smaller.
+
+Next we can compute the predicted percentages of "da" responses across conditions with the `emmeans` package.
+
+```{r}
+#| label: predicted-proportions
+
+initial_model |> 
+  emmeans(~ context * task, type = "response") |> 
+  as_tibble() |> 
+  rename_with(str_to_title, c(context, task, prob)) |> 
+  mutate(across(where(is.numeric), ~ round(., 2))) |> 
+  unite(
+    "95% CrI",
+    c(lower.HPD, upper.HPD),
+    sep = ", ",
+  ) |> 
+  mutate(
+    `95% CrI` = paste0("[", `95% CrI`, "]"),
+    Task = str_to_title(Task)
+    ) |> 
+  display()
+```
+
+## Prior and posterior predictive checks, group-level effects
+
+We ran prior predictive checks, i.e. the difference in percentage induced by the priors on the slopes, to ensure that the priors are not too informative.
+
+```{r}
+#| label: fig-prior-predictive-checks
+#| fig-cap: Prior predictive checks for the interaction effect.
+#| fig-width: 8
+#| fig-height: 5
+
+tibble(
+  Intercept = rnorm(1e5, 0, 1),
+  b1 = rnorm(1e5, 0, 0.1),
+  b2 = rnorm(1e5, 0, 0.1),
+  bint = rnorm(1e5, 0, 0.1)
+  ) |> 
+  mutate(
+    condition1 = inv_logit(Intercept + (-0.5) * b1 + (-0.5) * b2 + 0.25 * bint),
+    condition2 = inv_logit(Intercept + (-0.5) * b1 + 0.5 * b2 + (-0.25) * bint),
+    condition3 = inv_logit(Intercept + 0.5 * b1 + (-0.5) * b2 + (-0.25) * bint),
+    condition4 = inv_logit(Intercept + 0.5 * b1 + 0.5 * b2 + 0.25 * bint)
+    ) |> 
+  ggplot(aes(x = (condition4 - condition3) - (condition2 - condition1) * 100)) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_density(
+    color = "#56B4E9",
+    fill = "#56B4E9",
+    adjust = 0.8, 
+    alpha = 0.4
+    ) +
+  scale_y_continuous(expand = expansion(0)) +
+  labs(
+    x = "Predicted interaction effect (difference in the percentage of 'da' responses)",
+    y = "Probability density"
+    )
+```
+
+This looks OK. Now on the other end, we can run *posterior* predictive checks, to see if our model can predict accurately the data.
+
+```{r}
+#| label: fig-posterior-predictive-checks
+#| fig-cap: Posterior predictive checks for the model.
+#| fig-width: 8
+#| fig-height: 5
+
+pp_check(
+  object = initial_model, 
+  ndraws = 100
+  ) +
+  scale_y_continuous(expand = expansion(0)) +
+  labs(
+    x = "Number of 'da' responses", 
+    y = "Probability density"
+    )
+```
+
+The model seems pretty good! Finally, we can plot the varying (or group-level) effects, i.e. the different slopes for each participant:
+
+```{r}
+#| label: group-level-effects
+#| fig-cap: Group-level effects (i.e., slopes by-participant).
+#| fig-width: 8
+#| fig-height: 8
+
+data.frame(ranef(initial_model)$participant[, , 4]) |> 
+  rownames_to_column(var = "participant") |> 
+  arrange(Estimate) |> 
+  mutate(participant = as_factor(participant)) |> 
+  ggplot(aes(x = Estimate, y = participant)) +
+  geom_vline(xintercept = 0, linetype = 2) +
+  geom_pointrange2(
+    aes(xmin = Q2.5, xmax = Q97.5),
+    show.legend = FALSE
+    ) +
+  labs(
+    x = "Estimated slope for the interaction effect",
+    y = "Participant"
+  ) +
+  theme(axis.text.y = element_text(size = 8))
+```
+
+Our model seems sound all around. We can now proceed to the power analysis in the next notebook, `01-power-analysis.qmd`.
+
+
+:::: {.content-visible when-format="html"}
+
+&nbsp;
+&nbsp;
+&nbsp;
+
+::: {.callout-note collapse="true"}
+# Session information
+
+```{r}
+#| label: session-information
+#| echo: false
+
+cat("═════════════════════════════════════════════════════════════════════════")
+report_system(session = sessionInfo())
+cat("Packages used:")
+report_packages(session = sessionInfo())
+cat("═════════════════════════════════════════════════════════════════════════")
+```
+:::
+::::
+
+
