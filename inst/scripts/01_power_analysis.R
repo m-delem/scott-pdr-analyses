@@ -193,3 +193,10 @@ df_power |>
     panel.border = ggplot2::element_rect(fill = NA, colour = "black"),
     axis.line = ggplot2::element_blank()
   )
+
+# Save the plot
+ggplot2::ggsave(
+  filename = here::here("inst/figures/power-analysis-260414.png"),
+  width = 12, height = 8, dpi = 300,
+  device = "png"
+)
