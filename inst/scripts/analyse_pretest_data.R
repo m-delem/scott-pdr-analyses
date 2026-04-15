@@ -9,9 +9,11 @@
 #####################################################
 
 # Import the .txt file
-file_path <- 
+file_paths <- 
   here::here("inst/extdata/pretest") |> 
   fs::dir_ls(glob = "*.txt", recurse = TRUE)
+
+file_path <- file_paths[1]
 
 # Read and parse JSON as a list
 data_list <- jsonlite::fromJSON(file_path)
@@ -29,6 +31,8 @@ df_full <- tibble::tibble(
       "d" ~ 1, "g" ~ 0, 
       default = NA)
   )
+
+id <- df_full$id[1]
 
 # Remove headphone check data
 df_pretest <-
@@ -213,7 +217,7 @@ ggplot2::ggplot() +
   ggplot2::labs(
     x = "Frequency",
     y = "Pr(response = 'd')",
-    title = "Probit psychometric function",
+    title = paste0("Probit psychometric function, subject '", id, "'"),
     ) +
   ggplot2::theme_minimal(base_size = 12) +
   ggplot2::coord_cartesian(clip = "off") +
@@ -221,7 +225,8 @@ ggplot2::ggplot() +
 
 # Save the plot
 ggplot2::ggsave(
-  filename = here::here("inst/figures/pilot_pretest_probit_curve.png"),
+  filename = here::here(
+    paste0("inst/figures/pilot_pretest_probit_curve_", id, ".png")),
     width = 12, height = 8, dpi = 300,
     device = "png"
   )
