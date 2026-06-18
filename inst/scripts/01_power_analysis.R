@@ -38,13 +38,14 @@ future::plan(multisession, workers = n_models)
 # spreading 19 models across 19 workers with 2 chains/cores per model.
 # Total duration: 1d 8H 18M 31S
 
-# Parameters tested in the later a posteriori analysis (2026-04-14) using the 
-# final n_ppts and n_trials chosen in the preregistration 
+# Parameters tested in the later analysis (2026-06-16) using the 
+# final n_ppts chosen in the preregistration and more appropriate n_trials
 n_ppts <- 60
-n_trials <- 150
-beta_context_task <- seq(0.04, 0.16, 0.005)
-n_sims <- 100
-file <- here::here("data/power-analyses-results-260414.rds")
+n_trials <- c(132, 138, 144, 150)
+beta_context_task <- seq(0.08, 0.14, 0.005)
+n_sims <- 150
+file <- here::here("data/power-analyses-results-260616.rds")
+# The entire power analysis took 1d 5H 30M 9.24S on 22 cores.
 
 # Creating a dataset with one line per simulation based on a grid of parameters
 combinations <- tidyr::crossing(
@@ -102,7 +103,7 @@ df_power <-
   dplyr::mutate(
     n_ppts = paste(n_ppts, "participants"),
     n_trials = paste(n_trials, "trials"),
-    prop = round(betas_to_interaction(0, 0.3, 0.25, beta_context_task), 3),
+    prop = round(betas_to_interaction(0, 0.3, 0.25, beta_context_task), 4),
     perc = prop * 100,
     dplyr::across(c(n_ppts, n_trials, beta_context_task, prop, perc), factor)
   ) |> 
@@ -123,6 +124,8 @@ df_power <-
   
 knitr::kable(df_power)
 
+alpha <- 0.3
+
 df_power |> 
   ggplot2::ggplot(ggplot2::aes(
     x = perc,
@@ -138,30 +141,32 @@ df_power |>
     linewidth = 0.7,
     color = "red"
   ) +
-  ggplot2::geom_line(linewidth = 0.5) +
+  ggplot2::geom_line(linewidth = 0.5, alpha = alpha, show.legend = FALSE) +
   ggplot2::geom_point(
+    alpha = alpha,
     pch = 21, 
     color = "white",
     show.legend = FALSE,
-    size = 3
+    size = 2
   ) +
   ggplot2::geom_errorbar(
     ggplot2::aes(
       ymin = bf_dir_power - bf_dir_se,
       ymax = bf_dir_power + bf_dir_se),
+    alpha = alpha,
     width = 0,
     linewidth = .5,
     show.legend = FALSE
   ) +
-  # geom_smooth(
-  #   method = "lm", 
-  #   se = FALSE,
-  #   na.rm = TRUE,
-  #   linewidth = 0.5, 
-  #   alpha = 0.1, 
-  #   fullrange = TRUE, 
-  #   show.legend = FALSE
-  # ) +
+  ggplot2::geom_smooth(
+    method = "loess",
+    na.rm = TRUE,
+    linewidth = 1,
+    se = FALSE,
+    alpha = 0.2,
+    fullrange = TRUE,
+    show.legend = TRUE
+  ) +
   # annotate(
   #   geom = "text",
   #   label = "90% power",
@@ -173,15 +178,16 @@ df_power |>
   #   vjust = -1
   # ) +
   ggplot2::labs(
-    title = "A priori power analysis (100 simulations per dot, 2500 total)",
+    title = "A priori power analysis (150 simulations per dot, 7800 total)",
     x = "Interaction effect size (in percentage points)",
     y = "Statistical power (proportion of BF+ >= 10)",
-    color = "Number of\ntrials"
+    color = "Number of\ntrials",
+    fill = "Number of\ntrials"
   ) +
   ggplot2::facet_wrap(ggplot2::vars(n_ppts), nrow = 2) +
   ggplot2::scale_y_continuous(
-    limits = c(0, 1),
-    breaks = seq(0, 1, 0.2), 
+    limits = c(NA, 1),
+    breaks = seq(0, 1, 0.1), 
     expand = ggplot2::expansion(c(0, 0.05))) +
   ggplot2::scale_color_viridis_d() + 
   ggplot2::scale_fill_viridis_d() + 
@@ -196,7 +202,7 @@ df_power |>
 
 # Save the plot
 ggplot2::ggsave(
-  filename = here::here("inst/figures/power-analysis-260414.png"),
-  width = 12, height = 8, dpi = 300,
-  device = "png"
+  filename = here::here("inst/figures/power-analysis-260616.pdf"),
+  width = 12, 
+  height = 8
 )
